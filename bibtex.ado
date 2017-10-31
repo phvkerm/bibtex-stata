@@ -1,6 +1,6 @@
-*! bibtex 0.1, 20170915
-* help should say, input to be reasonably `clean' -- bibtex import does not check for syntax errors in the bib file ; such can cause havoc in the import... 
-* skip(string) is a list of bibtex fields which are to be ignored in the import, e.g., skip(abstract url) .  
+*! bibtex 0.2, 20171031
+* bibtex 0.1, 20170915
+
 
 pr def bibtex  
   
@@ -21,204 +21,303 @@ pr def bibtex
       bibtex_export `macval(0)' 
       exit
       }    
-    if `"`subcmd'"'=="journallist" {
+    if `"`subcmd'"'=="buildname" {
+      bibtex_buildname `macval(0)' 
+      exit
+      }    
+	if `"`subcmd'"'=="journallist" {
       bibtex_journallist `macval(0)' 
       exit
       }    
 	di as error `" `subcmd'  not a valid bibtex subcommand"'  
 
 end
+
+
+
   
 /* ---------------------------------------------------------------------- */
 /*    SUB COMMANDS                                                        */
 /* ---------------------------------------------------------------------- */
 
+// -------------------------------------------------------------------------------------------------------------------------------
+// -------------------------------------------------------------------------------------------------------------------------------
+// -------------------------------------------------------------------------------------------------------------------------------
 
 pr def bibtex_export 
 	version 13
-    syntax [if] [in] using/ [ ,  CONDition(string) wide skip(string)  replace type(string)  ]   
-	* wide informs that dta is in wide format
-	* condition() applies a condition to select entries to be exported
-	* skip() prevents fields in string to be exported
-	* keep() only selects fields(). skip() and keep() are mutually exclusive
+    syntax [if] [in] using/  [ ,  	///
+		type(string)        		///   type of export, default creates a bib file   (bib|btwsql|...)  
+		wide     					///	informs that the data is in wide format (it can also check this info from data characteristic _dta[format], otherwise assumes long form)	
+		replace        				///  replace export file if exsists
+		CONDition(string)    		///   select entries to be exported: if ... in ... format (default, all are exported)
+		sort(string)		 		///    sort the entries in the export file by XXX (XXX are field names, e.g.  author, title, year ... , e.g. sort(author year) , sort(bibd), etc..
+		///		
+		EXcludefields(string)     	///     ne pas exporter ces champs
+		INcludefields(string)      	///     exporter ces champs
+		noDROPNAMES					///   by default fiels author1, author2 ... and editor1 editor2 are not expored ; 
+		buildauthor(string asis)	///   create the variable author; string containst syntax for bibtex buildname author
+		buildeditor(string asis)	/// create the variable author; string containst syntax for bibtex buildname author
+		ORDERfields(string)			///  order fields ; by default, entries are exported in same order as appearing in the file
+		///
+		bibid(string)      			///  name of variable holding the bibtex entry identifier (otherwise read in _dta[bibid]  or use 'bibid') 	   
+		numid(string)      			///  name of variable holding a numberi identifier (otherwise read in _dta[bibid]  or use 'numid'); save as numid(none) if data contains none 	
+		entrytype(string)			///  name of the variable (or field) holding the type of entry 
+		fieldvar(varname)			/// if data in long form specifies which var contains the field name (otherwise read in _dta[fieldvar] or use 'field')		
+		contentvar(varname)			/// if data in long form specifies which var contains the content of entry (otherwise read in _dta[contentvar] or use 'content')		
+		]   
 	
-	if ("`type'"=="") loc type "bib"
-	if ("`: char _dta[BibFormat]'"=="wide") 	loc wide "wide"
+	
+	// parse options:
+	// -------------
+	if ("`type'"=="") loc type "bib"   // default export type
+	
+	if ("`: char _dta[Format]'"=="wide") 	loc wide "wide"     	// check format of data if stored in dta char
 
+	if ("`bibid'"=="")    	local bibid 	:  char _dta[bibid]  // name of the variable holding the string entry  identifier
+	if ("`bibid'"=="")    	local bibid 	bibid
+	if ("`numid'"=="none")	local numid 	
+	else {
+		if ("`numid'"=="")			local numid 	:	char _dta[numid]
+		if ("`numid'"=="")			local numid 	numid 
+	}
+	if ("`entrytype'"=="")   	local entrytype		: char _dta[entrytype]
+	if ("`entrytype'"=="")   	local entrytype		entrytype
+	 
+
+	// initiate export file:
+	// --------------------
 	tempname fout
     file open `fout' using `"`using'"' , write text `replace'
 
-	// Arrange data into wide form (easier to handle)
+
+	// organise data in wide form (if necessary):
+	// -----------------------------------------
 	if ("`wide'"=="") {
+		// I assume the long file has variables  [numid] bibid field content  -->   [numid]  bibid content1 content2 ... --> [numid] bibid TYPE title  year ...  (one line must be TYPE)
+  		// if numid does not exist, it is created from distinct values of bibid    
 		preserve
-		levelsof field , local(fields)
-		qui gen labid = .
+		if ("`fieldvar'"=="")		local fieldvar 	:	char _dta[fieldvar]
+		if ("`fieldvar'"=="")		local fieldvar 	field 
+		if ("`contentvar'"=="")		local contentvar :	char _dta[contentvar]
+		if ("`contentvar'"=="")		local contentvar content 		
+		if ("`numid'"=="") {
+			tempvar id
+			bys `bibid' : qui gen `id' = _n==_N
+			qui replace `id' = sum(`id')			
+			loc numid `id'
+		}	
+		levelsof `fieldvar' , local(fields)
+		tempvar labid
+		qui gen `labid' = .
 		loc j 0
 		foreach lab of local fields {
-			replace labid = `++j' if field=="`lab'" 
+			replace `labid' = `++j' if `fieldvar'=="`lab'" 
 		}
-		drop field
-		reshape wide content , i(id) j(labid)
+		drop `fieldvar'
+		reshape wide `contentvar'  , i(`numid') j(`labid')
 		forvalues k=1/`j' {
-			rename content`k'  `: word `k' of `fields' '
+			rename `contentvar'`k'  `: word `k' of `fields' '
 		}
 	}
 	
-	// Author and editor fields
-	foreach var of varlist author* {	
-		if (strlower("`var'")=="author") {
-			gen str1000 tmpauthor = author
-			continue , break
-		}	
-		if ("`var'"=="author1") gen str1000 tmpauthor = author1
-		else {
-			replace tmpauthor = tmpauthor + cond(`var'=="", "" , " and " + `var') 
-		}	
+	
+	// selection of entries to export:
+	// ------------------------------
+	tempvar toexport 
+	gen byte  `toexport'  =  0    `condition'    // inverted use of 0 and 1  
+	sort `toexport' `sort' 
+	qui count if `toexport'==0
+	if (r(N)==0) {
+		di as error "No entries to export."
+		error 2000
+	}	
+	loc N = r(N)
+	
+	
+	// handle authors and editors:
+	// --------------------------	
+	if ("`buildauthor'"!="") {
+		bibtex buildname author , `buildauthor' replace
 	}
-	foreach var of varlist editor* {	
-		if (strlower("`var'")=="editor") {
-			gen str1000 tmpeditor = editor
-			continue , break
-		}	
-		if ("`var'"=="editor1") gen str1000 tmpeditor = editor1
-		else {
-			replace tmpeditor = editor + cond(`var'=="", "" , " and " + `var') 
-		}	
+	if ("`buildeditor'"!="") {
+		bibtex buildname editor , `buildeditor' replace
+	}		
+	
+	// prepare the list of variables for the export
+	// --------------------------------------------
+	if ("`excludefields'"!="")  unab excludefields : `excludefields'   // handle abrevs
+	loc toexclude  `numid' `bibid' `entrytype' `excludefields' `toexport'
+	if ("dropnames'"=="")  	loc toexclude  `toexclude' author?* editor?*
+	qui describe , varlist
+	loc vlist `r(varlist)'	
+	if ("`includefields'"!="") {
+		unab includefields : `includefields'
+		loc vlist : list local(vlist)  &  local(includefields)   // keep vars which are in the data and in includefields
+	}
+	loc vlist : list local(vlist)  -  local(toexclude)   // drop numid and bibid along with vars which are in excludefield
+	di "vlist: `vlist'"	
+
+	if ("`orderfields'"!="") {
+		unab orderfields : `orderfields'	
+		loc orderfields : list local(orderfields) & local(vlist)
+		loc outorderfields : list local(vlist) - local(orderfields) 
+		loc vlist `orderfields' `outorderfields'
 	}
 	
-	loc varsordered ??  
-	
-	forvalues i=1/`=_N' 	{
-		loc lcontent  = TYPE[`i']
-		file write `fout'   `"@`macval(lcontent)'{`=bibid[`i']',"' _n 
-		file write `fout'  _tab
-		loc first 1 
-		foreach var of varlist `varsordered' {
-			loc lcontent  = `var'[`i']
-			if (`"`lcontent'"'!="") {
-				if (!`first') {
-					write `fout'  "," _n
+	// here vlist contains fields which are to be exported and in the required order
+		
+	// export to bib file:
+	// ------------------
+	if ("`type'"=="bib") {
+		forvalues indx=1/`N' 	{
+			loc lcontent  = `entrytype'[`indx']
+			file write `fout'   `"@`macval(lcontent)'{`=`bibid'[`indx']',"' _n 
+			loc first 1 
+			foreach var of varlist `vlist' {
+				loc lcontent  = `var'[`indx']
+				if (`"`macval(lcontent)'"'!="") {
+					if (!`first') {
+						file write `fout'  "," _n
+					}
+					* subsinstr for tmpauthor and tmpeditor
+					file write `fout'  _tab "`=subinstr("`var'","tmp","",1)'"  _tab(2)  "="  _tab   `"{`macval(lcontent)'}"' 
 					loc first 0
 				}
-				* subsinstr for tmpauthor and tmpeditor
-				file write `fout'  `=subsinstr("`var'","tmp","",1)  _tab(2)  "="  _tab   `"{`macval(lcontent)'}"' 
 			}
+			file write `fout'  _n "}" _n 
 		}
-		file write `fout'  _n "}" _n 
-	}
+	} // end export to .bib format
 	
+
+	if ("`type'"=="btwsql") {
+	}
+	if ("`type'"=="...format Orbi? ") {
+	}
 	
 	if ("`wide'"=="") 	restore
-
-	
-	
-	// handle authors and editors.
-	
-	
-		tempvar tag last
-		gen byte `tag' = 1 - (field=="TYPE")  
-		sort bibid id `tag'
-		bys bibid : gen byte `last' = (_n==_N) 
-	
-		if ("`type'"=="bib") {
-			forvalues i=1/`=_N' 	{
-				di "i==`i'"
-				if ( `tag'[`i']==0 )	{
-					loc lcontent  = content[`i']
-					file write `fout'   `"@`macval(lcontent)'{`=bibid[`i']',"' 
-				}
-				else {
-					file write `fout'  _tab
-					file write `fout'   `"`=field[`i']'"'
-					loc lcontent  = content[`i']
-					file write `fout'   _tab "=" _tab  `"{`macval(lcontent)'}"'
-					if (`last'[`i']==0) {
-						file write `fout'   ","
-					}
-					else {
-						file write `fout'  _n
-						file write `fout'  "}" 
-					}
-				}
-				file write  `fout' _n
-			}
-			file write  `fout' _n
-		}
-		if ("`type'"=="btwsql") {
-		}
-		
-	}
-	
-	if ("`wide'=="") {
-		other way...
-	}
-	
-	file close `fout'
-	
-end
-
-		
-
-pr def bibtex_exportold 
-	version 13
-    syntax [if] [in] using/ [ ,  CONDition(string) wide skip(string)  replace type(string)  ]   
-	* wide informs that dta is in wide format
-	* condition() applies a condition to select entries to be exported
-	* skip() prevents fields in string to be exported
-	* keep() only selects fields(). skip() and keep() are mutually exclusive
-	
-	if ("`type'"=="") loc type "bib"
-
-	// handle authors and editors.
-	
-	tempname fout
-    file open `fout' using `"`using'"' , write text `replace'
-
-	if ("`wide'=="") {
-	
-		tempvar tag last
-		gen byte `tag' = 1 - (field=="TYPE")  
-		sort bibid id `tag'
-		bys bibid : gen byte `last' = (_n==_N) 
-	
-		if ("`type'"=="bib") {
-			forvalues i=1/`=_N' 	{
-				di "i==`i'"
-				if ( `tag'[`i']==0 )	{
-					loc lcontent  = content[`i']
-					file write `fout'   `"@`macval(lcontent)'{`=bibid[`i']',"' 
-				}
-				else {
-					file write `fout'  _tab
-					file write `fout'   `"`=field[`i']'"'
-					loc lcontent  = content[`i']
-					file write `fout'   _tab "=" _tab  `"{`macval(lcontent)'}"'
-					if (`last'[`i']==0) {
-						file write `fout'   ","
-					}
-					else {
-						file write `fout'  _n
-						file write `fout'  "}" 
-					}
-				}
-				file write  `fout' _n
-			}
-			file write  `fout' _n
-		}
-		if ("`type'"=="btwsql") {
-		}
-		
-	}
-	
-	if ("`wide'=="") {
-		other way...
-	}
-	
-	file close `fout'
 	
 end
 
 
+// -------------------------------------------------------------------------------------------------------------------------------
+// -------------------------------------------------------------------------------------------------------------------------------
+// -------------------------------------------------------------------------------------------------------------------------------
+pr def bibtex_buildname , rclass
+    version 13
+    syntax anything(name=nametype) , [ from(varlist) Generate(name) replace STYle(string) bind(string asis) ]
+	// this will create a 'bibtyle' variable author or editor (or whatever filled in generate() )
+	// on the basis of variables passed in from() and style().
+	// style determines the bibtex style: LNAME, FNAME or FNAME LNAME (or FNAME only or LNAME only or 'as is')
+	// from is a list of variables that contain the data about each author, typically author1, author2 etc. 
+	/// it only works with wide formats!
+	
+	if !inlist("`nametype'","author","editor") {
+		di as error "only buildname author or buildname editor are allowed"
+		exit 198
+	}
+	if !inlist("`style'",  "", "asis", "standard", "comma", "fnameonly", "lnameonly") {
+		di as error "style(`style') unknown: use style(asis|standard|comma|fnameonly|lnameonly)"
+		exit 198
+	}	
+	if ("`style'"=="")  loc style comma
+	
+	
+	if ("`generate'"=="") {
+		loc generate `nametype'
+	}	
+	cap confirm new variable `generate'
+	if (_rc == 0) qui gen str999 `generate' = ""
+	else {
+		if ("`replace'"!="") {
+			qui drop `generate'
+			qui gen str999 `generate' = ""
+		}
+		else {
+			di as error "`generate' already exists"
+			exit 198
+		}		
+	}	
+	
+	// bind is the string to use between names, defualt is " and "
+	if ("`bind'"=="") loc bind "and"
+
+	if ("`from'"=="")  loc from "`nametype'?*" // all authorX  or editorX variables
+	unab from : `from'
+	loc prefix ""
+	tempvar fname lname tvar posbraf posbral poscomf poscoml posspaf posspal
+	qui gen str999 `fname' = ""
+	qui gen str999 `lname' = ""
+	qui gen str999 `tvar' = ""
+	qui gen int `posbraf' = .
+	qui gen int `posbral' = .
+	qui gen int `poscomf' = .
+	qui gen int `poscoml' = .
+	qui gen int `posspaf' = .
+	qui gen int `posspal' = .
+	foreach var of varlist `from' {
+		qui replace `tvar' = strtrim(`var')
+		if ("`style'"=="asis") {
+			qui replace `generate' = `generate' + "`prefix'" + `tvar' 		
+		}
+		else {
+			* read var content and generate fname and lname:
+			qui replace `posbraf' = strpos(`tvar', "{")
+			qui replace `posbral' = strrpos(`tvar', "}")
+			qui replace `poscomf' = strpos(`tvar', ",")
+			qui replace `poscoml' = strrpos(`tvar', ",")
+			qui replace `posspaf' = strpos(`tvar', " ")
+			qui replace `posspal' = strrpos(`tvar', " ")
+			qui replace `fname' = ""
+			qui replace `lname' = ""
+			qui count if (`posbraf'==0 & `posbral'>0) | (`posbraf'>0 & `posbral'==0)
+			if (r(N)>0) di as error "Errors detected in `=r(N)' entries of `var' (curly brackets not matched)
+			// no brackets ...
+				//	 with leading comma:  LNAME , FNAME 
+				qui replace `lname' = substr(`tvar', 1 , `poscomf'-1)        			if (`posbraf'+`posbral'==0) & `poscomf'>0     
+				qui replace `fname' = substr(`tvar', `poscomf'+1 , strlen(`tvar') )     if (`posbraf'+`posbral'==0) & `poscomf'>0    			     
+				//	 without comma:   FNAME LNAME
+				qui replace `fname' = substr(`tvar', 1 , `posspal'-1 )      			if (`posbraf'+`posbral'==0) & `poscomf'==0    
+				qui replace `lname' = substr(`tvar', `posspal'+1 , strlen(`tvar') ) 	if (`posbraf'+`posbral'==0) & `poscomf'==0    
+			// curly bracket detected... 
+				// no text outside of brackets:  {LNAME}   : fname empty 
+				qui replace `lname' = `tvar'        									if (`posbraf'==1 & `posbral'==strlen(`tvar'))     
+				qui replace `fname' = ""      											if (`posbraf'==1 & `posbral'==strlen(`tvar'))	
+				// leading comma before brackets : LNAME , {... {...} , ... }	  
+				qui replace `lname' = substr(`tvar', 1 , `poscomf'-1)        			if (`posbraf'+`posbral'>0) & inrange(`poscomf' , 1 , `posbraf')     
+				qui replace `fname' = substr(`tvar', `poscomf'+1 , strlen(`tvar') )     if (`posbraf'+`posbral'>0) & inrange(`poscomf' , 1 , `posbraf')  	
+				// trailing comma after brackets :   {... {...} , ... }	, FNAME
+				qui replace `lname' = substr(`tvar', 1 , `poscoml'-1)        			if (`posbraf'+`posbral'>0) & inrange(`poscoml' , `posbral' , strlen(`tvar'))     
+				qui replace `fname' = substr(`tvar', `poscoml'+1 , strlen(`tvar') )     if (`posbraf'+`posbral'>0) & inrange(`poscoml' , `posbral' , strlen(`tvar'))  
+				// some text after the brackets but no comma:  {... {...}...}  _ LNAME
+				qui replace `fname' = substr(`tvar', 1 , `posspal'-1  )      			if (`lname'=="") & `posspal'>`posbral'  
+				qui replace `lname' = substr(`tvar', `posspal'+1 , strlen(`tvar'))     	if (`lname'=="") & `posspal'>`posbral'      
+				// some text before the brackets but no comma :  ... {...}  : take all bracketed content as lname
+				qui replace `fname' = substr(`tvar', 1 , `posspaf'-1)      				if (`lname'=="") & `posspal'<`posbral' 					
+				qui replace `lname' = substr(`tvar', `posbraf' , strlen(`tvar'))     	if (`lname'=="") & `posspal'<`posbral'       
+			qui count if `lname'=="" & `tvar'!="" 
+			if (r(N)>0) di as error "Last name not identified (or empty) for `=r(N)' entries of `var'"   
+			
+			* add up the pieces:
+			if ("`style'"=="standard")  	qui replace `generate' = `generate' + "`prefix'" + strtrim(`fname') + cond(strtrim(`lname')!="" , " " + strtrim(`lname') , "") 	if `tvar'!=""
+			if ("`style'"=="comma")  		qui replace `generate' = `generate' + "`prefix'" + strtrim(`lname') + cond(strtrim(`fname')!="" , ", " + strtrim(`fname') , "") if `tvar'!=""
+			if ("`style'"=="fnameonly")  	qui replace `generate' = `generate' + "`prefix'" + strtrim(`fname')   				if `tvar'!=""
+			if ("`style'"=="lnameonly")  	qui replace `generate' = `generate' + "`prefix'" + strtrim(`lname')   				if `tvar'!=""
+		}	
+		loc prefix " `bind' "
+	}
+	qui compress `generate'
+end
+
+
+	
+// -------------------------------------------------------------------------------------------------------------------------------
+// -------------------------------------------------------------------------------------------------------------------------------
+// -------------------------------------------------------------------------------------------------------------------------------
+
+// The import routine is relatively complex. Complexity due to various idiosyncrasies in the possible input format, such as handling embedded {}, ` ' , " " etc.
+// I do not guarantee 99% success in the import, especially if the input bib file is not clean---but seems to work in vast majority of situations!
+// skip(string) is a list of bibtex fields which are to be ignored in the import, e.g., skip(abstract url) .  
 
 pr def bibtex_import , rclass
 
@@ -388,7 +487,7 @@ pr def bibtex_import , rclass
 
 				// post in dta file 
 				* type
-				post `fout' (`i') ("`id'") ("TYPE") (strupper("`type'")) 
+				post `fout' (`i') ("`id'") ("entrytype") (strupper("`type'")) 
 				* authors and editors 
 				if ("`kaut'"!="") {
 					forv j=1/`kaut' {
@@ -436,8 +535,12 @@ pr def bibtex_import , rclass
 	qui {
 		use `"`saving'`bibtexout'"' , clear
 		sort id field 
-		char define _dta[BibFormat]	"long"
-		if ("`wide'"!="") {
+		if ("`wide'"=="") {
+			char define _dta[Format]	"long"
+			char define _dta[contentvar] "content"
+			char define _dta[fieldvar] "field"	
+		} 
+		else {
 			levelsof field , local(fields)
 			gen labid = .
 			loc j 0
@@ -450,10 +553,13 @@ pr def bibtex_import , rclass
 				label variable 	content`k' "`: word `k' of `fields' '"	
 				rename content`k'  `: word `k' of `fields' '
 			}
-			order id bibid TYPE
-			char define _dta[BibFormat]	"wide"
+			order id bibid entrytype
+			char define _dta[Format]	"wide"
 		}
-		char define _dta[Source] `"Original import from [`using'] by -bibtex- on c(current_date)."' 
+		char define _dta[Source] `"Original import from [`using'] by -bibtex- on `=c(current_date)'."' 
+		char define _dta[bibid] "bibid"
+		char define _dta[numid] "id"	
+		char define _dta[entrytype] "entrytype"
 		compress
 		save `"`saving'`bibtexout'"' , replace	
 	}
