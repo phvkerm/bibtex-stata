@@ -1,5 +1,7 @@
-*! bibtex 0.2, 20171031
-* bibtex 0.1, 20170915
+*! bibtex 0.3, 20171106: start adding secondary features:  journallist and namelist
+* bibtex 0.2, 20171031: export
+* bibtex 0.1, 20170915: import
+
 
 
 pr def bibtex  
@@ -25,10 +27,32 @@ pr def bibtex
       bibtex_buildname `macval(0)' 
       exit
       }    
+/*
+    if `"`subcmd'"'=="widetolong" {
+      bibtex_widetolong `macval(0)' 
+      exit
+      }   
+    if `"`subcmd'"'=="longtowide" {
+      bibtex_longtowide `macval(0)' 
+      exit
+      }   
+    if `"`subcmd'"'=="duplicates" {
+      bibtex_duplicates `macval(0)' 
+      exit
+      }   
+*/
+*	if `"`subcmd'"'=="summarize" {   // not very useful
+*      bibtex_summarize `macval(0)' 
+*      exit
+*      }    
 	if `"`subcmd'"'=="journallist" {
       bibtex_journallist `macval(0)' 
       exit
       }    
+	if `"`subcmd'"'=="namelist" {
+      bibtex_namelist `macval(0)' 
+      exit
+      }
 	di as error `" `subcmd'  not a valid bibtex subcommand"'  
 
 end
@@ -39,6 +63,39 @@ end
 /* ---------------------------------------------------------------------- */
 /*    SUB COMMANDS                                                        */
 /* ---------------------------------------------------------------------- */
+
+
+// -------------------------------------------------------------------------------------------------------------------------------
+// -------------------------------------------------------------------------------------------------------------------------------
+// -------------------------------------------------------------------------------------------------------------------------------
+
+// converts a wide bibdta file to long bibdta file (or vice versa): 
+//   sets the data characteristics
+//   checks for errors
+  
+pr def bibtex_widetolong 
+	version 13
+end
+
+pr def bibtex_longtowide 
+	version 13
+end
+
+// looks for duplilcate on "bibid" then attempt to identify duplicates on title and authors, etc...  
+pr def bibtex_duplicates 
+	version 13
+end
+
+
+// provides summary stats of the file
+// how many entries
+//   tabulate  year
+//   tabulate  type
+pr def bibtex_summarize 
+	version 13
+end
+
+
 
 // -------------------------------------------------------------------------------------------------------------------------------
 // -------------------------------------------------------------------------------------------------------------------------------
@@ -156,7 +213,6 @@ pr def bibtex_export
 		loc vlist : list local(vlist)  &  local(includefields)   // keep vars which are in the data and in includefields
 	}
 	loc vlist : list local(vlist)  -  local(toexclude)   // drop numid and bibid along with vars which are in excludefield
-	di "vlist: `vlist'"	
 
 	if ("`orderfields'"!="") {
 		unab orderfields : `orderfields'	
@@ -205,7 +261,7 @@ end
 // -------------------------------------------------------------------------------------------------------------------------------
 pr def bibtex_buildname , rclass
     version 13
-    syntax anything(name=nametype) , [ from(varlist) Generate(name) replace STYle(string) bind(string asis) ]
+    syntax anything(name=nametype) , [ from(varlist) Generate(name) replace STYle(string) bind(string asis) CONDition(string) ]
 	// this will create a 'bibtyle' variable author or editor (or whatever filled in generate() )
 	// on the basis of variables passed in from() and style().
 	// style determines the bibtex style: LNAME, FNAME or FNAME LNAME (or FNAME only or LNAME only or 'as is')
@@ -256,7 +312,7 @@ pr def bibtex_buildname , rclass
 	qui gen int `posspaf' = .
 	qui gen int `posspal' = .
 	foreach var of varlist `from' {
-		qui replace `tvar' = strtrim(`var')
+		qui replace `tvar' = strtrim(`var')  `condition'
 		if ("`style'"=="asis") {
 			qui replace `generate' = `generate' + "`prefix'" + `tvar' 		
 		}
@@ -309,6 +365,149 @@ pr def bibtex_buildname , rclass
 	qui compress `generate'
 end
 
+
+// -------------------------------------------------------------------------------------------------------------------------------
+// -------------------------------------------------------------------------------------------------------------------------------
+// -------------------------------------------------------------------------------------------------------------------------------
+// bibtex journallist [fieldname--(default is 'journal')] , ...
+pr def bibtex_journallist , sortpreserve 
+    version 13
+    syntax [anything(name=field)]  [, wide contentvar(varname) fieldvar(varname) freq cond(string) saving(string asis) replace ]     
+// cond must contain if in
+	if ("`field'"=="")   loc field journal
+	_bibtex_checktype  , `wide' fieldvar(`fieldvar') contentvar(`contentvar')
+	if (`"`saving'"' != "") {
+		preserve
+	}	
+	if ("`wide'"=="") {
+		tempvar first
+		qui egen `first' = tag(`contentvar') if `fieldvar'=="`field'" 
+		qui replace `first' = 0 if `contentvar'=="" & `first'==1	
+		if ("`freq'"!="") {
+			qui by `fieldvar' `contentvar' : gen _freq = _N if `first'
+			loc freq _freq
+		}			
+		list `contentvar' `freq' if `first'==1 , noobs clean
+		if (`"`saving'"' != "") {
+			qui keep if `first'==1 
+			qui keep `contentvar' `freq'
+		}	
+	}
+	else {
+		tempvar first
+		sort `field' 
+		qui egen `first' = tag(`field')  `cond'
+		if ("`freq'"!="") {
+			qui by `field' :  gen _freq = _N if `first'
+			loc freq _freq
+		}	
+		qui replace `first' = 0 if (`field'=="") & `first'==1	
+		list `field' `freq' if `first'==1 , noobs clean noheader 
+		if (`"`saving'"' != "") {
+			qui keep if `first'==1 		
+			qui keep `field' `freq'
+		}	
+	}
+	if (`"`saving'"' != "") {
+		save `saving' , `replace'
+		restore
+	}
+end
+
+// -------------------------------------------------------------------------------------------------------------------------------
+// -------------------------------------------------------------------------------------------------------------------------------
+// -------------------------------------------------------------------------------------------------------------------------------
+// bibtex authorlist
+pr def bibtex_namelist , sortpreserve 
+    version 13
+    syntax  anything(name=nametype) [ , from(string)  wide contentvar(varname) fieldvar(varname) freq CONDition(string) saving(string asis) replace ]     
+	// cond must contain if in; 
+	_bibtex_checktype  , `wide' fieldvar(`fieldvar') contentvar(`contentvar')
+	if ("`wide'"=="") {
+		tempvar fname lname
+		bibtex buildname `nametype' , from(`contentvar') condition(if (substr(`fieldvar',1,7)=="`nametype'") & (`fieldvar'!="`nametype'"))  gen(`fname') style(fnameonly)
+		bibtex buildname `nametype' , from(`contentvar') condition(if (substr(`fieldvar',1,7)=="`nametype'") & (`fieldvar'!="`nametype'"))  gen(`lname') style(lnameonly)	
+		tempvar first
+		qui egen `first' = tag(`fname' `lname') if `condition'
+		qui replace `first' = 0 if `lname'=="" & `first'==1	
+		sort `lname' `fname'
+		if ("`freq'"!="") {
+			qui by `lname' `fname' : gen _freq = _N if `first'
+			loc freq _freq
+		}			
+		list `lname' `fname' `freq' if `first'==1 , noobs clean
+		if (`"`saving'"' != "") {
+			qui keep if `first'==1 
+			qui keep `lname' `fname'  `freq'
+			rename `lvar' lastname
+			rename `fvar' firstname
+			save `saving' , `replace'
+		}	
+	}
+	else {
+		tempvar first
+		tempname fvar lvar
+		unab from : `nametype'?*
+		loc i 0
+		foreach var of varlist `from' {		
+			bibtex buildname `nametype' , from(`var') gen(`fvar'`++i') style(fnameonly)
+			bibtex buildname `nametype' , from(`var') gen(`lvar'`i') style(lnameonly)			
+		}
+		preserve
+			if ("`condition'"!="") qui keep `condition'
+			if _N==0 {
+				di as error "No observation satisfy the condition."
+				exit  2000
+			}	
+			keep `fvar'* `lvar'*
+			qui gen n = _n
+			qui reshape long `fvar' `lvar' , i(n) 
+			drop n
+			qui keep if `lvar'!=""
+			sort `lvar' `fvar'
+			qui egen `first' = tag(`fvar' `lvar') 
+			if ("`freq'"!="") {
+				qui by `lvar' `fvar'  :  gen _freq = _N if `first'
+				loc freq _freq
+			}	
+			list `lvar' `fvar' `freq' if `first'==1 , noobs clean noheader 
+			if (`"`saving'"' != "") {
+				qui keep if `first'==1
+				rename `lvar' lastname
+				rename `fvar' firstname
+				qui keep lastname firstname `freq'
+				save `saving' , `replace'
+			}
+		restore	
+	}
+end
+	
+
+// -------------------------------------------------------------------------------------------------------------------------------
+// -------------------------------------------------------------------------------------------------------------------------------
+// -------------------------------------------------------------------------------------------------------------------------------
+pr def _bibtex_checktype 
+	version 13
+	syntax [, wide fieldvar(varname) contentvar(varname) bibid(varname) ]
+	if ( ("`wide'"!="") | ("`: char _dta[Format]'"=="wide") ) 	loc wide "wide" 
+	if ("`wide'"!="") & ("`fieldvar'`contentvar'"!="") {
+		di as error "fieldvar() and contentvar() irrelevant in wide format."
+		exit 198
+	}	
+	if ("`wide'"=="") {
+		if ("`fieldvar'"=="")		local fieldvar 	:	char _dta[fieldvar]
+		if ("`fieldvar'"=="")		local fieldvar 	field 
+		if ("`contentvar'"=="")		local contentvar :	char _dta[contentvar]
+		if ("`contentvar'"=="")		local contentvar content 		
+		c_local fieldvar `fieldvar'
+		c_local contentvar `contentvar'
+	}
+	c_local wide `wide'
+	if ("`bibid'"=="")    	local bibid 	:  char _dta[bibid]  // name of the variable holding the string entry  identifier
+	if ("`bibid'"=="")    	local bibid 	bibid
+	c_local bibid `bibid'
+end
+	
 
 	
 // -------------------------------------------------------------------------------------------------------------------------------
@@ -553,6 +752,7 @@ pr def bibtex_import , rclass
 				label variable 	content`k' "`: word `k' of `fields' '"	
 				rename content`k'  `: word `k' of `fields' '
 			}
+			cap destring year , replace			
 			order id bibid entrytype
 			char define _dta[Format]	"wide"
 		}
